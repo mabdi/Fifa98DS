@@ -8,12 +8,14 @@ PERIOD = 1 # period is 1 sec
 K1 = 10 # MAX SIZE OF @pkt 
 K2 = 10 # MAX SIZE OF @P
 DLY = 40 # if a client is not request for a period of DLY its not a DDOS
+MTD = 1
 ALPHA1 = 0.85
 ALPHA2 = 0.85
 UP = ALPHA1
 DN = 1.0 - ALPHA1
-MAXFLASH = 1000
-LOGPRD = 100
+FLASHDUR = 100
+LOGPRD = 2000
+LOGLEVEL = 5
 BOTSIZE = 100
 BOTTYPE = :const
 BOTCONSTSPEED = 1
@@ -68,7 +70,9 @@ class FlashCrowd
 	io = File.open(DATASET)
 	i = 0
 	@max = -1
-	while i < MAXFLASH do
+	req = Worldcup98.read(io)
+	start = req.timestamp_
+	while req.timestamp_ < start + FLASHDUR do
                 i = i +1;
                 req = Worldcup98.read(io)
 		@pkt.push req
@@ -78,6 +82,9 @@ class FlashCrowd
    def maxCID
 	return @max
    end
+   def size
+	return @pkt.size
+   end
    def stime
 	return @pkt.first.timestamp_
    end
@@ -85,7 +92,7 @@ class FlashCrowd
 	return @pkt.last.timestamp_
    end
    def finished?
-	return @ind >=MAXFLASH
+	return @ind >=@pkt.size
    end
    def nxt time
 	ret = Array.new
@@ -113,8 +120,10 @@ class BotNet
 	for i in startTime..endTime
 		@bots.each_with_index{ |e,j|
 			if e[1] + startTime == i then
-				@pkt.push Worldcup98.getNew i,e[0]
-				@bots[j] = e[1] + BOTCONSTSPEED
+				BOTCONSTSPEED.ceil.times{ |z|
+					@pkt.push Worldcup98.getNew i,e[0]
+				}
+				@bots[j] = [e[0], e[1] + (1.0 / BOTCONSTSPEED).ceil ]
 			end
 		}
 	end
@@ -134,10 +143,12 @@ class DSRequest
   @pkt 
   @lst 
   @fst
-  @p = Array.new
+  @p
   def initialize req
      @cid = req.clientID_
      @pkt = Hash.new
+     @fst = req.timestamp_
+     @p = Array.new
   end
   def makesafe
 	$sc.push @cid
@@ -155,56 +166,58 @@ class DSRequest
 	sxy = x.zip(y).map{|a,b| a*b}.sum
 	n = x.size
 	c =  (n * sxy - sx * sy ) / (Math.sqrt((n*sx2 - sx**2 )*(n*sy2 - sy**2)))
-d "#{x} #{y} #{c}"
 	return c
   end
   def method1
-	return calcCorrel @pkt.values @pkt.keys	
+	return calcCorrel @pkt.values,@pkt.keys	
   end
   def method2
   	return calcCorrel @pkt.values.odd_values,@pkt.values.even_values
   end
   def process
-     r1 = method1
-     r2 = method2
+     r =0
+     if MTD == 1 then
+     	r = method1
+     else
+     	r = method2
+     end
      @pkt.clear
-     @p.push [r1,r2]
-     if r1 > UP || r1 < DN then
+     @p.push r
+=begin
+     if r > UP || r < DN then
 	l 2,"traffic client #{@cid} is unpredictible in #{@p.size}'th time"
      else
 	l 2,"traffic client #{@cid} is predictible in #{@p.size}'th time"
      end
+=end
      if @p.size == K2 then
-	pb1 = @p.map{|a| a[0]}.sum / K2
-	pb2 = @p.map{|a| a[1]}.sum / K2
-	if (pb1 >= ALPHA2) then
-		l 3,"traffic client #{@cid} is ATTACK by method 1"
-	end
-	if (pb2 >= ALPHA2) then
-		l 3,"traffic client #{@cid} is ATTACK by method 2"
-	end
-	if (pb1 < ALPHA2 && pb2 < ALPHA2) then
-		l 3,"traffic client #{@cid} is not ATTACK pb1=#{pb1} pb2=#{pb2} -- make safe"
-		
+b local_variables.map{|_dbglocal_variables| "#{_dbglocal_variables.to_s}= #{eval _dbglocal_variables.to_s}" }
+	pb = @p.sum / K2
+	if (pb >= ALPHA2) then
+		l 3,"traffic client #{@cid} is ATTACK by method #{MTD} pb=#{pb}"
+		makeAttack
+	else
+		l 3,"traffic client #{@cid} is not ATTACK pb=#{pb} -- make safe"
+		makesafe
 	end
      end
   end
-  def add req
-     if !@lst.nil? && req.timestamp_ - @lst > DLY then
-	 # mark as safe
-	 makesafe
-#	 l 1,"Client #{@cid} marked as Safe -- DLY=#{req.timestamp_ - @lst}                      last=#{@lst} now=#{req.timestamp_}"
-	 return
+  def cleanup now
+     if !@lst.nil? && (now - @lst > DLY) then
+         makesafe
+         return
      end
+  end
+  def add req
+     cleanup req.timestamp_
      @lst = req.timestamp_
      if @pkt.keys.include? req.timestamp_ then
          @pkt[req.timestamp_] = @pkt[req.timestamp_] + 1
      else
-	 @fst = req.timestamp_
          @pkt[req.timestamp_] = 1
      end
-     if req.timestamp_ - @fst > 2* K1 then
-         process 
+     if req.timestamp_ - @fst >  K1 then
+        process 
      end
   end
 end
@@ -216,16 +229,25 @@ def d(s)
 	puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} line:#{line} -- #{s.to_s}#{color_f}"
 end
 def l(n,s)
+   if n <= LOGLEVEL then
 	color_s = "\033[1m\033[34m"
 	color_f = "\033[0m\033[22m"
 	space = "   " * n
 	puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} #{space} #{s.to_s}#{color_f}"
+   end
 end
 def e(n,s)
 	color_s = "\033[1m\033[31m"
 	color_f = "\033[0m\033[22m"
 	space = "   " *n
 	puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} #{space} #{s.to_s}#{color_f}"
+end
+def b a
+	color_s = "\033[1m\033[31m"
+        color_f = "\033[0m\033[22m"
+	line= (caller.first.split ":")[1]
+        puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} line:#{line} -- #{a.join '; '}#{color_f}"
+	gets
 end
 def drop req
 		
@@ -248,14 +270,18 @@ def process req
 	end
 	$pr[req.clientID_].add req
 end
+def cleanup time
+	$pr.each_value{ |v| v.cleanup time }
+end
 def simulate
 	flash = FlashCrowd.new
-	l 1,"Dataset #{DATASET} loaded for flash crowded traffic"
+	l 1,"Dataset #{DATASET} loaded for flash crowded traffic size=#{flash.size} TimeDuration=#{FLASHDUR} seconds"
 	botnet = BotNet.new(flash.maxCID ,BOTSIZE,flash.stime,flash.etime)
 	l 1,"BotNet simulator created with size=#{BOTSIZE} and startCID=#{flash.maxCID}"
 	i=0
 	time = flash.stime
 	while !flash.finished? do
+		l 1,"Now= #{Time.at(time).strftime("%Y-%m-%d %H:%M:%S")}"
 	        fls = flash.nxt time
 		bot = botnet.nxt time
 		time += 1
@@ -264,7 +290,11 @@ def simulate
 			if i>0 && i % LOGPRD == 0 then l 1,"#{i} packets processed" end
 			process req
 		}
+		if (time % DLY == 0) then
+			cleanup time
+		end
 	end
+	l 1,"#{i} packets processed"
 end
 #---------- MAIN
 simulate
