@@ -13,7 +13,7 @@ ALPHA1 = 0.85
 ALPHA2 = 0.85
 UP = ALPHA1
 DN = 1.0 - ALPHA1
-FLASHDUR = 100
+FLASHDUR = 30
 LOGPRD = 2000
 LOGLEVEL = 5
 BOTSIZE = 100
@@ -177,10 +177,11 @@ class DSRequest
   def process
      r =0
      if MTD == 1 then
-     	r = method1
+     	r = method1.abs
      else
-     	r = method2
+     	r = method2.abs
      end
+b binding
      @pkt.clear
      @p.push r
 =begin
@@ -191,7 +192,7 @@ class DSRequest
      end
 =end
      if @p.size == K2 then
-b local_variables.map{|_dbglocal_variables| "#{_dbglocal_variables.to_s}= #{eval _dbglocal_variables.to_s}" }
+b binding
 	pb = @p.sum / K2
 	if (pb >= ALPHA2) then
 		l 3,"traffic client #{@cid} is ATTACK by method #{MTD} pb=#{pb}"
@@ -242,12 +243,38 @@ def e(n,s)
 	space = "   " *n
 	puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} #{space} #{s.to_s}#{color_f}"
 end
-def b a
+def b2 a
 	color_s = "\033[1m\033[31m"
         color_f = "\033[0m\033[22m"
 	line= (caller.first.split ":")[1]
         puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} line:#{line} -- #{a.join '; '}#{color_f}"
-	gets
+	begin
+	  s = gets
+	  if s.downcase == "!" then break end
+	  if s.start_with? "-" then eval s[1..-1] 
+	  else eval ("puts #{s}"),binding end
+	end while true
+end
+def b bind
+        color_s = "\033[1m\033[31m"
+        color_f = "\033[0m\033[22m"
+        line= (caller.first.split ":")[1]
+	vars = eval('local_variables',bind).map{|v| "#{v.to_s}= #{eval(v.to_s,bind)}"}.join ";"
+        puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} line:#{line} -- #{vars}#{color_f}"
+	begin
+		print "\033[31m"
+	        begin
+		  print "dbg> "
+	          s = gets.strip
+	          if s == "" then break end
+	          if s.start_with? "-" then eval s[1..-1],bind
+	          else eval ("puts (#{s}).to_s"),bind end
+		rescue => e
+		  puts "Error Ecurred: \033[33m#{e.message}\033[0m"
+	        end while true
+	ensure
+		print "\033[0m"
+	end
 end
 def drop req
 		
@@ -298,6 +325,4 @@ def simulate
 end
 #---------- MAIN
 simulate
-l 0, "sc is =#{$sc.to_s}"
-l 0, "rj is =#{$rj.to_s}"
-l 0, "pr is =#{$pr.keys.to_s}"
+b binding
