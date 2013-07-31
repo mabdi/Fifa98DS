@@ -1,4 +1,5 @@
 require 'bindata'
+require "readline" # for debugging porpuse
 
 #----------- CONSTANTS
 
@@ -6,21 +7,21 @@ DATASET = "wc_day58_3"
 #DATASET = "test_log"
 PERIOD = 1 # period is 1 sec
 K1 = 10 # MAX SIZE OF @pkt 
-K2 = 10 # MAX SIZE OF @P
+K2 = 3 # MAX SIZE OF @P
 DLY = 40 # if a client is not request for a period of DLY its not a DDOS
 MTD = 1
 ALPHA1 = 0.85
-ALPHA2 = 0.85
+ALPHA2 = 0.95
 UP = ALPHA1
 DN = 1.0 - ALPHA1
-FLASHDUR = 30
+FLASHDUR = 100
 LOGPRD = 2000
 LOGLEVEL = 5
 BOTSIZE = 100
 BOTTYPE = :const
-BOTCONSTSPEED = 1
-BOTACTIVEFROM = 0 # a bot instance start after this
-BOTACTIVERAND = 0 # a bot instance start sending packet from a random number between 0 and BOTACTIVERAND (will sum with BOTACTIVEFROM)
+BOTCONSTSPEED = 40
+BOTACTIVEFROM = 5 # a bot instance start after this
+BOTACTIVERAND = 10 # a bot instance start sending packet from a random number between 0 and BOTACTIVERAND (will sum with BOTACTIVEFROM)
 #---------- VARIABLES
 $sc = Array.new # safe client
 $rj = Array.new # Rejected trafic
@@ -128,7 +129,9 @@ class BotNet
 		}
 	end
    end
-
+   def size
+	return @pkt.size
+   end
    def nxt time
 	ret = Array.new
         while @ind < @pkt.size && @pkt[@ind].timestamp_ == time do
@@ -150,14 +153,6 @@ class DSRequest
      @fst = req.timestamp_
      @p = Array.new
   end
-  def makesafe
-	$sc.push @cid
-        $pr.delete @cid
-  end
-  def makeAttack
-	$rj.push @cid
-	$pr.delete @cid
-  end
   def calcCorrel x,y
 	sx = x.sum
 	sy = y.sum
@@ -166,46 +161,49 @@ class DSRequest
 	sxy = x.zip(y).map{|a,b| a*b}.sum
 	n = x.size
 	c =  (n * sxy - sx * sy ) / (Math.sqrt((n*sx2 - sx**2 )*(n*sy2 - sy**2)))
+	if c.nan? then c = 1 end
 	return c
   end
   def method1
-	return calcCorrel @pkt.values,@pkt.keys	
+	@x = @pkt.values
+	@y = @pkt.keys	
   end
   def method2
-  	return calcCorrel @pkt.values.odd_values,@pkt.values.even_values
+  	@x = @pkt.values.odd_values
+	@y = @pkt.values.even_values
   end
   def process
      r =0
      if MTD == 1 then
-     	r = method1.abs
+     	method1
      else
-     	r = method2.abs
+     	method2
      end
-b binding
+     r = (calcCorrel @x,@y).abs
      @pkt.clear
      @p.push r
-=begin
-     if r > UP || r < DN then
-	l 2,"traffic client #{@cid} is unpredictible in #{@p.size}'th time"
-     else
-	l 2,"traffic client #{@cid} is predictible in #{@p.size}'th time"
-     end
-=end
+     @fst = @lst	
+#
+#     if r > UP || r < DN then
+#	l 2,"traffic client #{@cid} is unpredictible in #{@p.size}'th time"
+#     else
+#	l 2,"traffic client #{@cid} is predictible in #{@p.size}'th time"
+#     end
+#
      if @p.size == K2 then
-b binding
 	pb = @p.sum / K2
 	if (pb >= ALPHA2) then
 		l 3,"traffic client #{@cid} is ATTACK by method #{MTD} pb=#{pb}"
-		makeAttack
+		makeAttack @cid
 	else
 		l 3,"traffic client #{@cid} is not ATTACK pb=#{pb} -- make safe"
-		makesafe
+		makesafe @cid
 	end
      end
   end
   def cleanup now
      if !@lst.nil? && (now - @lst > DLY) then
-         makesafe
+         makesafe @cid
          return
      end
   end
@@ -220,6 +218,18 @@ b binding
      if req.timestamp_ - @fst >  K1 then
         process 
      end
+  end
+  def get_x
+	return @x
+  end
+  def get_y
+	return @y
+  end
+  def get_pkt
+	return @pkt
+  end
+  def get_p
+	return @p
   end
 end
 #---------- FUNCTIONS
@@ -243,44 +253,49 @@ def e(n,s)
 	space = "   " *n
 	puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} #{space} #{s.to_s}#{color_f}"
 end
-def b2 a
-	color_s = "\033[1m\033[31m"
-        color_f = "\033[0m\033[22m"
-	line= (caller.first.split ":")[1]
-        puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} line:#{line} -- #{a.join '; '}#{color_f}"
-	begin
-	  s = gets
-	  if s.downcase == "!" then break end
-	  if s.start_with? "-" then eval s[1..-1] 
-	  else eval ("puts #{s}"),binding end
-	end while true
-end
 def b bind
         color_s = "\033[1m\033[31m"
         color_f = "\033[0m\033[22m"
         line= (caller.first.split ":")[1]
-	vars = eval('local_variables',bind).map{|v| "#{v.to_s}= #{eval(v.to_s,bind)}"}.join ";"
+	vars = (eval('local_variables',bind) | eval('instance_variables',bind)).map{|v| "#{v.to_s}= #{eval(v.to_s,bind)}"}.join ";"
         puts  "#{color_s}#{Time.new.strftime("%H:%M:%S")} line:#{line} -- #{vars}#{color_f}"
 	begin
 		print "\033[31m"
 	        begin
-		  print "dbg> "
-	          s = gets.strip
+		  s = Readline.readline("dbg> ",true).strip
 	          if s == "" then break end
-	          if s.start_with? "-" then eval s[1..-1],bind
-	          else eval ("puts (#{s}).to_s"),bind end
+	          eval ("puts ' = ' + (#{s}).to_s"),bind
 		rescue => e
-		  puts "Error Ecurred: \033[33m#{e.message}\033[0m"
+		  puts " > Error ocurred: \033[1m#{e.backtrace[0]}: #{e.message}\033[22m"
 	        end while true
 	ensure
 		print "\033[0m"
 	end
 end
-def drop req
-		
+def x bind
+        color_s = "\033[1m\033[33m"
+        color_f = "\033[0m\033[22m"
+        puts  "#{color_s}Execuation mode: #{color_f}"
+        begin
+                print "\033[33m"
+                begin
+                  s = Readline.readline("exe> ",true).strip
+                  if s == "" then break end
+                  eval ("puts ' = ' + (#{s}).to_s"),bind
+                rescue => e
+                  puts " > Error ocurred: \033[1m#{e.backtrace[0]}: #{e.message}\033[22m"
+                end while true
+        ensure
+                print "\033[0m"
+        end
 end
+$allowed = 0
+def drop req
+ $allowed+=1	
+end
+$denied =0
 def allow req
-
+ $denied+=1
 end
 def process req
 	if $sc.include? req.clientID_ then
@@ -297,15 +312,27 @@ def process req
 	end
 	$pr[req.clientID_].add req
 end
+$safes = 0
+def makesafe cid
+	$safes +=1
+        $sc.push cid
+        #$pr.delete cid
+end
+$attackers = 0
+def makeAttack cid
+	$attackers +=1
+        $rj.push cid
+        #$pr.delete cid
+end
 def cleanup time
 	$pr.each_value{ |v| v.cleanup time }
 end
+$allPackets = 0
 def simulate
 	flash = FlashCrowd.new
 	l 1,"Dataset #{DATASET} loaded for flash crowded traffic size=#{flash.size} TimeDuration=#{FLASHDUR} seconds"
-	botnet = BotNet.new(flash.maxCID ,BOTSIZE,flash.stime,flash.etime)
-	l 1,"BotNet simulator created with size=#{BOTSIZE} and startCID=#{flash.maxCID}"
-	i=0
+	botnet = BotNet.new(flash.maxCID+1 ,BOTSIZE,flash.stime,flash.etime)
+	l 1,"BotNet simulator created with size=#{BOTSIZE} and startCID=#{flash.maxCID+1}"
 	time = flash.stime
 	while !flash.finished? do
 		l 1,"Now= #{Time.at(time).strftime("%Y-%m-%d %H:%M:%S")}"
@@ -313,16 +340,34 @@ def simulate
 		bot = botnet.nxt time
 		time += 1
 		(fls | bot).each{ |req|
-                        i +=1
-			if i>0 && i % LOGPRD == 0 then l 1,"#{i} packets processed" end
+                        $allPackets +=1
+			if $allPackets>0 && $allPackets % LOGPRD == 0 then l 1,"#{$allPackets} packets processed" end
 			process req
 		}
 		if (time % DLY == 0) then
 			cleanup time
 		end
 	end
-	l 1,"#{i} packets processed"
+
+	botnot = ((flash.maxCID+1)..(flash.maxCID+1+BOTSIZE)).select{|c| !$rj.include? c}.size
+	flsyes = $rj.select{|c| c <= flash.maxCID}.size
+
+	l 0, "Packets Analysied:\t\t\t #{$allPackets}"
+	l 0, "Packets Allowed:\t\t\t #{$allowed}"
+	l 0, "Packets Denied:\t\t\t #{$denied}"
+	l 0, "Clients Analysied:\t\t\t #{$pr.size}"
+	l 0, "Clients Determined Safe:\t\t #{$safes}"
+	l 0, "Clients Determined Attacker:\t\t #{$attackers}"
+	l 0, "Botnet clients not Detected:\t\t #{botnot}"
+	l 0, "Dataset clients detected as attacker:\t #{flsyes}"
+	x binding
 end
+#---------- InputArguments
+MainBinding = binding
+ARGV.each{|a|
+        if a.strip == "dbg" then
+                b  MainBinding
+        end
+}
 #---------- MAIN
 simulate
-b binding
