@@ -8,7 +8,7 @@ DATASET = "wc_day58_3"
 PERIOD = 1 # period is 1 sec
 K1 = 10 # MAX SIZE OF @pkt 
 K2 = 3 # MAX SIZE OF @P
-DLY = 40 # if a client is not request for a period of DLY its not a DDOS
+DLY = 15 # if a client is not request for a period of DLY its not a DDOS
 MTD = 1
 ALPHA1 = 0.85
 ALPHA2 = 0.95
@@ -19,13 +19,14 @@ LOGPRD = 2000
 LOGLEVEL = 5
 BOTSIZE = 100
 BOTTYPE = :const
-BOTCONSTSPEED = 40
-BOTACTIVEFROM = 5 # a bot instance start after this
-BOTACTIVERAND = 10 # a bot instance start sending packet from a random number between 0 and BOTACTIVERAND (will sum with BOTACTIVEFROM)
+BOTCONSTSPEED = 10
+BOTACTIVEFROM = 50 # a bot instance start after this
+BOTACTIVERAND = 5 # a bot instance start sending packet from a random number between 0 and BOTACTIVERAND (will sum with BOTACTIVEFROM)
 #---------- VARIABLES
 $sc = Array.new # safe client
 $rj = Array.new # Rejected trafic
 $pr = Hash.new # Processing trafic
+$botnet = nil
 #----------- CLASSES
 class Array
   def sum
@@ -97,7 +98,7 @@ class FlashCrowd
    end
    def nxt time
 	ret = Array.new
-    	while @ind < @pkt.size && @pkt[@ind].timestamp_ == time do
+    	while @ind < @pkt.size && @pkt[@ind].timestamp_ >= time && @pkt[@ind].timestamp_ < time+PERIOD do
 		ret.push @pkt[@ind]
 		@ind +=1
 	end
@@ -131,6 +132,9 @@ class BotNet
    end
    def size
 	return @pkt.size
+   end
+   def botMember? cid
+      return @bots.map{|a,b| a}.include? cid
    end
    def nxt time
 	ret = Array.new
@@ -193,16 +197,17 @@ class DSRequest
      if @p.size == K2 then
 	pb = @p.sum / K2
 	if (pb >= ALPHA2) then
-		l 3,"traffic client #{@cid} is ATTACK by method #{MTD} pb=#{pb}"
+		l 3,"traffic client #{@cid} is ATTACK by method #{MTD} pb=#{pb} -- #{($botnet.botmem @cid)?"BOTMEM":""}"
 		makeAttack @cid
 	else
-		l 3,"traffic client #{@cid} is not ATTACK pb=#{pb} -- make safe"
+		l 3,"traffic client #{@cid} is not ATTACK pb=#{pb} -- make safe -- #{($botnet.botmem @cid)?"BOTMEM":""}"
 		makesafe @cid
 	end
      end
   end
   def cleanup now
      if !@lst.nil? && (now - @lst > DLY) then
+         l 3,"traffic client #{@cid} is safe due max delay -- #{($botnet.botmem @cid)?"BOTMEM":""}"
          makesafe @cid
          return
      end
@@ -289,6 +294,9 @@ def x bind
                 print "\033[0m"
         end
 end
+def h_get hash_,key_
+  return hash_[key_]
+end 
 $allowed = 0
 def drop req
  $allowed+=1	
@@ -331,14 +339,14 @@ $allPackets = 0
 def simulate
 	flash = FlashCrowd.new
 	l 1,"Dataset #{DATASET} loaded for flash crowded traffic size=#{flash.size} TimeDuration=#{FLASHDUR} seconds"
-	botnet = BotNet.new(flash.maxCID+1 ,BOTSIZE,flash.stime,flash.etime)
+	$botnet = BotNet.new(flash.maxCID+1 ,BOTSIZE,flash.stime,flash.etime)
 	l 1,"BotNet simulator created with size=#{BOTSIZE} and startCID=#{flash.maxCID+1}"
 	time = flash.stime
 	while !flash.finished? do
-		l 1,"Now= #{Time.at(time).strftime("%Y-%m-%d %H:%M:%S")}"
+		l 1,"Now= #{Time.at(time).strftime("%Y-%m-%d %H:%M:%S")} (#{time - flash.stime} seconds elapsed)"
 	        fls = flash.nxt time
-		bot = botnet.nxt time
-		time += 1
+		bot = $botnet.nxt time
+		time += PERIOD
 		(fls | bot).each{ |req|
                         $allPackets +=1
 			if $allPackets>0 && $allPackets % LOGPRD == 0 then l 1,"#{$allPackets} packets processed" end
