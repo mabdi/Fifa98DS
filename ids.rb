@@ -6,8 +6,8 @@ require "readline" # for debugging porpuse
 DATASET = "wc_day58_3"
 #DATASET = "test_log"
 PERIOD = 1 # period is 1 sec
-K1 = 10 # MAX SIZE OF @pkt 
-K2 = 3 # MAX SIZE OF @P
+K1 = 5 # MAX SIZE OF @pkt 
+K2 = 5 # MAX SIZE OF @P
 DLY = 15 # if a client is not request for a period of DLY its not a DDOS
 MTD = 1
 ALPHA1 = 0.85
@@ -19,9 +19,15 @@ LOGPRD = 2000
 LOGLEVEL = 5
 BOTSIZE = 100
 BOTTYPE = :const
-BOTCONSTSPEED = 10
-BOTACTIVEFROM = 50 # a bot instance start after this
+BOTCONSTSPEED = 1
+BOTACTIVEFROM = 20 # a bot instance start after this
 BOTACTIVERAND = 5 # a bot instance start sending packet from a random number between 0 and BOTACTIVERAND (will sum with BOTACTIVEFROM)
+RED = "\033[31m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+BOLD = "\033[1m"
+BOLDEND = "\033[22m"
+COLOREND = "\033[0m"
 #---------- VARIABLES
 $sc = Array.new # safe client
 $rj = Array.new # Rejected trafic
@@ -64,11 +70,9 @@ end
 class FlashCrowd
    @pkt
    @max
-   @ind
 
    def initialize
 	@pkt = Array.new
-	@ind = 0
 	io = File.open(DATASET)
 	i = 0
 	@max = -1
@@ -80,6 +84,8 @@ class FlashCrowd
 		@pkt.push req
 		if req.clientID_ > @max then @max = req.clientID_ end
         end
+	@stime = @pkt.first.timestamp_
+	@etime = @pkt.last.timestamp_
    end
    def maxCID
 	return @max
@@ -88,30 +94,21 @@ class FlashCrowd
 	return @pkt.size
    end
    def stime
-	return @pkt.first.timestamp_
+	return @stime
    end
    def etime
-	return @pkt.last.timestamp_
+	return @etime
    end
-   def finished?
-	return @ind >=@pkt.size
-   end
+
    def nxt time
-	ret = Array.new
-    	while @ind < @pkt.size && @pkt[@ind].timestamp_ >= time && @pkt[@ind].timestamp_ < time+PERIOD do
-		ret.push @pkt[@ind]
-		@ind +=1
-	end
-	return ret
+	return @pkt.select {|p| p.timestamp_ >= time && p.timestamp_ < time + PERIOD}
    end
 end
 class BotNet
    @pkt
    @bots
-   @ind
    def  initialize startID,n,startTime,endTime
 	@bots = (startID..(startID + n)).map{|x| [x, BOTACTIVEFROM + rand(BOTACTIVERAND).to_i]}
-	@ind =0
 	case BOTTYPE
 		when :const then const startTime,endTime
 	end
@@ -137,12 +134,7 @@ class BotNet
       return @bots.map{|a,b| a}.include? cid
    end
    def nxt time
-	ret = Array.new
-        while @ind < @pkt.size && @pkt[@ind].timestamp_ == time do
-                ret.push @pkt[@ind]
-                @ind +=1
-        end
-        return ret
+        return @pkt.select{|p| p.timestamp_ >= time && p.timestamp_ < time + PERIOD}
    end
 end
 class DSRequest
@@ -184,9 +176,9 @@ class DSRequest
      	method2
      end
      r = (calcCorrel @x,@y).abs
-     @pkt.clear
+     @pkt.delete 0
      @p.push r
-     @fst = @lst	
+     	
 #
 #     if r > UP || r < DN then
 #	l 2,"traffic client #{@cid} is unpredictible in #{@p.size}'th time"
@@ -197,17 +189,20 @@ class DSRequest
      if @p.size == K2 then
 	pb = @p.sum / K2
 	if (pb >= ALPHA2) then
-		l 3,"traffic client #{@cid} is ATTACK by method #{MTD} pb=#{pb} -- #{($botnet.botmem @cid)?"BOTMEM":""}"
+		l 3,"traffic client #{@cid} \tis ATTACK by method #{MTD} pb=#{pb} #{($botnet.botMember? @cid)?(set_red " -BOTMEM-"):""}"
 		makeAttack @cid
 	else
-		l 3,"traffic client #{@cid} is not ATTACK pb=#{pb} -- make safe -- #{($botnet.botmem @cid)?"BOTMEM":""}"
+		l 3,"traffic client #{@cid} \tis not ATTACK pb=#{pb} -- make safe #{($botnet.botMember? @cid)?(set_red " -BOTMEM-"):""}"
 		makesafe @cid
 	end
      end
   end
   def cleanup now
+     if ($sc.include? @cid) || ($rj.include? @cid) then 
+	return 
+     end
      if !@lst.nil? && (now - @lst > DLY) then
-         l 3,"traffic client #{@cid} is safe due max delay -- #{($botnet.botmem @cid)?"BOTMEM":""}"
+         l 3,"traffic client #{@cid} \tis safe due max delay #{($botnet.botMember? @cid)?(set_red " -BOTMEM-"):""}"
          makesafe @cid
          return
      end
@@ -238,6 +233,18 @@ class DSRequest
   end
 end
 #---------- FUNCTIONS
+def set_red s
+	return "#{RED}#{s}#{COLOREND}"
+end
+def set_blue s
+        return "#{BLUE}#{s}#{COLOREND}"
+end
+def set_yellow s
+        return "#{YELLOW}#{s}#{COLOREND}"
+end
+def set_bold s
+        return "#{BOLD}#{s}#{BOLDEND}"
+end
 def d(s)
 	color_s = "\033[1m\033[33m"
 	color_f = "\033[0m\033[22m"
@@ -342,12 +349,13 @@ def simulate
 	$botnet = BotNet.new(flash.maxCID+1 ,BOTSIZE,flash.stime,flash.etime)
 	l 1,"BotNet simulator created with size=#{BOTSIZE} and startCID=#{flash.maxCID+1}"
 	time = flash.stime
-	while !flash.finished? do
+	while time <= flash.etime do
 		l 1,"Now= #{Time.at(time).strftime("%Y-%m-%d %H:%M:%S")} (#{time - flash.stime} seconds elapsed)"
+
 	        fls = flash.nxt time
-		bot = $botnet.nxt time
+		bot = $botnet.nxt time 
 		time += PERIOD
-		(fls | bot).each{ |req|
+		(fls.concat bot).each{ |req|
                         $allPackets +=1
 			if $allPackets>0 && $allPackets % LOGPRD == 0 then l 1,"#{$allPackets} packets processed" end
 			process req
@@ -368,7 +376,7 @@ def simulate
 	l 0, "Clients Determined Attacker:\t\t #{$attackers}"
 	l 0, "Botnet clients not Detected:\t\t #{botnot}"
 	l 0, "Dataset clients detected as attacker:\t #{flsyes}"
-	x binding
+#	x binding
 end
 #---------- InputArguments
 MainBinding = binding
