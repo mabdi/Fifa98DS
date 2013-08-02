@@ -4,12 +4,10 @@ require "readline" # for debugging porpuse
 #----------- CONSTANTS
 
 DATASET = "wc_day58_3"
-#DATASET = "test_log"
 PERIOD = 1 # period is 1 sec
 K1 = 5 # MAX SIZE OF @pkt 
 K2 = 5 # MAX SIZE OF @P
 DLY = 15 # if a client is not request for a period of DLY its not a DDOS
-MTD = 1
 ALPHA1 = 0.85
 ALPHA2 = 0.95
 UP = ALPHA1
@@ -18,7 +16,6 @@ FLASHDUR = 100
 LOGPRD = 2000
 LOGLEVEL = 5
 BOTSIZE = 100
-BOTTYPE = :const
 BOTCONSTSPEED = 1
 BOTACTIVEFROM = 20 # a bot instance start after this
 BOTACTIVERAND = 5 # a bot instance start sending packet from a random number between 0 and BOTACTIVERAND (will sum with BOTACTIVEFROM)
@@ -57,9 +54,6 @@ class Worldcup98 < BinData::Record
   uint8 :type_
   uint8 :server_
 
-  def p
-	d "#{timestamp_} #{clientID_} #{objectID_} #{size_} #{method_} #{status_} #{type_} #{server_}"
-  end
   def self.getNew time,cid
 	ins = Worldcup98.new
 	ins.timestamp_ = time
@@ -68,9 +62,6 @@ class Worldcup98 < BinData::Record
   end
 end
 class FlashCrowd
-   @pkt
-   @max
-
    def initialize
 	@pkt = Array.new
 	io = File.open(DATASET)
@@ -105,13 +96,9 @@ class FlashCrowd
    end
 end
 class BotNet
-   @pkt
-   @bots
    def  initialize startID,n,startTime,endTime
 	@bots = (startID..(startID + n)).map{|x| [x, BOTACTIVEFROM + rand(BOTACTIVERAND).to_i]}
-	case BOTTYPE
-		when :const then const startTime,endTime
-	end
+	const startTime,endTime
    end
 
    def const startTime,endTime
@@ -138,11 +125,6 @@ class BotNet
    end
 end
 class DSRequest
-  @cid
-  @pkt 
-  @lst 
-  @fst
-  @p
   def initialize req
      @cid = req.clientID_
      @pkt = Hash.new
@@ -170,26 +152,14 @@ class DSRequest
   end
   def process
      r =0
-     if MTD == 1 then
-     	method1
-     else
-     	method2
-     end
+     method1
      r = (calcCorrel @x,@y).abs
      @pkt.delete 0
      @p.push r
-     	
-#
-#     if r > UP || r < DN then
-#	l 2,"traffic client #{@cid} is unpredictible in #{@p.size}'th time"
-#     else
-#	l 2,"traffic client #{@cid} is predictible in #{@p.size}'th time"
-#     end
-#
      if @p.size == K2 then
 	pb = @p.sum / K2
 	if (pb >= ALPHA2) then
-		l 3,"traffic client #{@cid} \tis ATTACK by method #{MTD} pb=#{pb} #{($botnet.botMember? @cid)?(set_red " -BOTMEM-"):""}"
+		l 3,"traffic client #{@cid} \tis ATTACK pb=#{pb} #{($botnet.botMember? @cid)?(set_red " -BOTMEM-"):""}"
 		makeAttack @cid
 	else
 		l 3,"traffic client #{@cid} \tis not ATTACK pb=#{pb} -- make safe #{($botnet.botMember? @cid)?(set_red " -BOTMEM-"):""}"
@@ -331,13 +301,11 @@ $safes = 0
 def makesafe cid
 	$safes +=1
         $sc.push cid
-        #$pr.delete cid
 end
 $attackers = 0
 def makeAttack cid
 	$attackers +=1
         $rj.push cid
-        #$pr.delete cid
 end
 def cleanup time
 	$pr.each_value{ |v| v.cleanup time }
@@ -376,14 +344,6 @@ def simulate
 	l 0, "Clients Determined Attacker:\t\t #{$attackers}"
 	l 0, "Botnet clients not Detected:\t\t #{botnot}"
 	l 0, "Dataset clients detected as attacker:\t #{flsyes}"
-#	x binding
 end
-#---------- InputArguments
-MainBinding = binding
-ARGV.each{|a|
-        if a.strip == "dbg" then
-                b  MainBinding
-        end
-}
 #---------- MAIN
 simulate
